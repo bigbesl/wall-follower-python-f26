@@ -45,10 +45,15 @@ def cross_product(v1, v2):
 
 
 robot = MBot()
-setpoint = 0.5    # Desired distance from the wall (meters).
-drive_speed = 0.3  # Forward speed along the wall (m/s).
-kp = 1.0           # P-control gain for the distance correction.
-max_correction = 0.5  # Cap on the correction speed (m/s).
+
+SETPOINT = 0.5          # Desired distance from the wall (meters).
+DRIVE_SPEED = 0.25      # Speed along the wall (m/s).
+CORRECTION_SPEED = 0.1  # Bang-bang correction speed toward/away from the wall (m/s).
+
+# The Lidar reports angles measured clockwise, which is the opposite of the
+# robot body frame's right-hand-rule convention. Set to 1.0 if the printed
+# min_angle is positive when the wall is physically on the robot's left.
+LIDAR_ANGLE_SIGN = -1.0
 
 try:
     while True:
@@ -63,25 +68,35 @@ try:
             time.sleep(0.1)
             continue
 
-        # Unit vector pointing from the robot toward the wall.
-        to_wall = np.array([np.cos(min_angle), np.sin(min_angle), 0.0])
+        angle = LIDAR_ANGLE_SIGN * min_angle
+        print(f"dist: {min_dist:.2f} m   angle: {np.degrees(angle):6.1f} deg")
 
-        # Cross with z-hat to get a unit vector parallel to the wall,
-        # pointing in the direction the robot should drive.
+        # Unit vector pointing from the robot toward the nearest point on the
+        # wall. The shortest ray is perpendicular to the wall, so this is the
+        # wall normal.
+        to_wall = np.array([np.cos(angle), np.sin(angle), 0.0])
+
+        # Cross z-hat with the normal to get a unit vector parallel to the
+        # wall. This ordering drives forward when the wall is on the right, so
+        # the robot follows walls on its right-hand side.
         along_wall = cross_product([0.0, 0.0, 1.0], to_wall)
 
-        # P-control: positive error means we are too far from the wall,
-        # so push toward it; negative error pushes away from it.
-        error = min_dist - setpoint
-        correction = np.clip(kp * error, -max_correction, max_correction)
+        # Bang-bang control: the correction is always full magnitude, only its
+        # direction switches depending on which side of the setpoint we're on.
+        if min_dist > SETPOINT:
+            correction = CORRECTION_SPEED       # Too far, steer into the wall.
+        else:
+            correction = -CORRECTION_SPEED      # Too close, steer away.
 
-        # Combine driving along the wall with the correction toward/away
-        # from it, then send the velocity command.
-        velocity = drive_speed * along_wall + correction * to_wall
+        # Combine driving along the wall with the correction toward/away from
+        # it, then send the velocity command.
+        velocity = DRIVE_SPEED * along_wall + correction * to_wall
         robot.drive(velocity[0], velocity[1], 0.0)
 
         # Sleep for a bit before reading a new scan.
-        time.sleep(0.1)
-except:
-    # Catch any exception, including the user quitting, and stop the robot.
+        time.sleep(0.05)
+except KeyboardInterrupt:
+    pass
+finally:
+    # Always stop the robot on the way out, however the loop ended.
     robot.stop()
